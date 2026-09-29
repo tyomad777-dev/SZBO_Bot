@@ -237,7 +237,7 @@ async def skip_contact(callback: CallbackQuery, state: FSMContext):
 
 
 # ============ ЗАВЕРШЕНИЕ ПРИЁМА ============
-async def async def finish_appeal(message: Message, state: FSMContext, contact):
+async def finish_appeal(message: Message, state: FSMContext, contact):
     data = await state.get_data()
     user_id = message.chat.id
     file_id = data.get("file_id")

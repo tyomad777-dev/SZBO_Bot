@@ -4,7 +4,6 @@ import os
 import sqlite3
 from datetime import datetime
 
-from dotenv import load_dotenv
 from aiogram import Bot, Dispatcher, F
 from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
@@ -18,9 +17,7 @@ from aiogram.types import (
     Message,
 )
 
-# ============ ЗАГРУЗКА .env ============
-import os
-
+# ============ НАСТРОЙКИ ============
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 ADMIN_CHAT_ID = int(os.getenv("ADMIN_CHAT_ID", "0"))
 DB_PATH = "appeals.db"
@@ -29,13 +26,6 @@ if not BOT_TOKEN:
     raise SystemExit("❌ BOT_TOKEN не задан в переменных окружения Bothost")
 if ADMIN_CHAT_ID == 0:
     raise SystemExit("❌ ADMIN_CHAT_ID не задан в переменных окружения Bothost")
-DB_PATH = "appeals.db"                         # ← ID вашей группы активистов
-DB_PATH = "appeals.db"
-
-if not BOT_TOKEN:
-    raise SystemExit("❌ BOT_TOKEN не задан. Проверь файл .env")
-if ADMIN_CHAT_ID == 0:
-    raise SystemExit("❌ ADMIN_CHAT_ID не задан. Проверь файл .env")
 
 logging.basicConfig(
     level=logging.INFO,
@@ -53,19 +43,23 @@ def init_db():
             category TEXT,
             text TEXT,
             contact TEXT,
+            file_id TEXT,
+            file_type TEXT,
             created_at TEXT
         )
     """)
     conn.commit()
     conn.close()
 
-def save_appeal(user_id, category, text, contact):
+
+def save_appeal(user_id, category, text, contact, file_id=None, file_type=None):
     conn = sqlite3.connect(DB_PATH)
     cur = conn.cursor()
     cur.execute(
-        "INSERT INTO appeals (user_id, category, text, contact, created_at) "
-        "VALUES (?, ?, ?, ?, ?)",
-        (user_id, category, text, contact,
+        "INSERT INTO appeals "
+        "(user_id, category, text, contact, file_id, file_type, created_at) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?)",
+        (user_id, category, text, contact, file_id, file_type,
          datetime.now().isoformat(timespec="seconds")),
     )
     appeal_id = cur.lastrowid
@@ -73,14 +67,18 @@ def save_appeal(user_id, category, text, contact):
     conn.close()
     return appeal_id
 
+
 def get_appeal(appeal_id):
     conn = sqlite3.connect(DB_PATH)
     cur = conn.cursor()
-    cur.execute("SELECT user_id, category, text FROM appeals WHERE id = ?",
-                (appeal_id,))
+    cur.execute(
+        "SELECT user_id, category, text FROM appeals WHERE id = ?",
+        (appeal_id,),
+    )
     row = cur.fetchone()
     conn.close()
     return row
+
 
 # ============ БОТ И ДИСПЕТЧЕР ============
 bot = Bot(
@@ -89,14 +87,18 @@ bot = Bot(
 )
 dp = Dispatcher()
 
+
 # ============ СОСТОЯНИЯ (FSM) ============
 class AppealForm(StatesGroup):
     choosing_category = State()
     writing_text = State()
+    attaching_file = State()
     writing_contact = State()
+
 
 class AdminReply(StatesGroup):
     writing_reply = State()
+
 
 # ============ КАТЕГОРИИ ============
 CATEGORIES = {
@@ -106,12 +108,14 @@ CATEGORIES = {
     "other":  "📝 Другое",
 }
 
+
 def categories_kb():
     buttons = [
         [InlineKeyboardButton(text=label, callback_data=f"cat:{code}")]
         for code, label in CATEGORIES.items()
     ]
     return InlineKeyboardMarkup(inline_keyboard=buttons)
+
 
 # ============ /start ============
 @dp.message(CommandStart())
@@ -125,6 +129,7 @@ async def cmd_start(message: Message, state: FSMContext):
         "Выберите категорию обращения:",
         reply_markup=categories_kb(),
     )
+
 
 # ============ ВЫБОР КАТЕГОРИИ ============
 @dp.callback_query(F.data.startswith("cat:"))
@@ -140,10 +145,67 @@ async def choose_category(callback: CallbackQuery, state: FSMContext):
     )
     await callback.answer()
 
+
 # ============ ТЕКСТ ОБРАЩЕНИЯ ============
 @dp.message(AppealForm.writing_text)
 async def get_text(message: Message, state: FSMContext):
     await state.update_data(text=message.text)
+    await state.set_state(AppealForm.attaching_file)
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="Пропустить вложение",
+                              callback_data="skip_file")]
+    ])
+    await message.answer(
+        "📎 Если есть скриншот, фото или документ — пришлите сейчас.\n\n"
+        "Это поможет разобраться быстрее. "
+        "Если прикладывать нечего — нажмите «Пропустить вложение».",
+        reply_markup=kb,
+    )
+
+
+# ============ ПРИЁМ ВЛОЖЕНИЯ ============
+@dp.message(AppealForm.attaching_file, F.photo)
+async def get_photo(message: Message, state: FSMContext):
+    file_id = message.photo[-1].file_id
+    await state.update_data(file_id=file_id, file_type="photo")
+    await ask_contact(message, state)
+
+
+@dp.message(AppealForm.attaching_file, F.document)
+async def get_document(message: Message, state: FSMContext):
+    await state.update_data(
+        file_id=message.document.file_id,
+        file_type="document",
+    )
+    await ask_contact(message, state)
+
+
+@dp.message(AppealForm.attaching_file, F.video)
+async def get_video(message: Message, state: FSMContext):
+    await state.update_data(
+        file_id=message.video.file_id,
+        file_type="video",
+    )
+    await ask_contact(message, state)
+
+
+@dp.message(AppealForm.attaching_file)
+async def get_unsupported(message: Message):
+    await message.answer(
+        "⚠️ Поддерживаются только фото, документы и видео. "
+        "Пришлите один из них или нажмите «Пропустить вложение»."
+    )
+
+
+@dp.callback_query(F.data == "skip_file", AppealForm.attaching_file)
+async def skip_file(callback: CallbackQuery, state: FSMContext):
+    await state.update_data(file_id=None, file_type=None)
+    await ask_contact(callback.message, state)
+    await callback.answer()
+
+
+# ============ СПРОСИТЬ КОНТАКТ ============
+async def ask_contact(message: Message, state: FSMContext):
     await state.set_state(AppealForm.writing_contact)
     kb = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="Пропустить", callback_data="skip_contact")]
@@ -154,25 +216,33 @@ async def get_text(message: Message, state: FSMContext):
         reply_markup=kb,
     )
 
+
 # ============ КОНТАКТ (ввод или пропуск) ============
 @dp.message(AppealForm.writing_contact)
 async def get_contact(message: Message, state: FSMContext):
     await finish_appeal(message, state, contact=message.text)
+
 
 @dp.callback_query(F.data == "skip_contact", AppealForm.writing_contact)
 async def skip_contact(callback: CallbackQuery, state: FSMContext):
     await finish_appeal(callback.message, state, contact=None)
     await callback.answer()
 
+
 # ============ ЗАВЕРШЕНИЕ ПРИЁМА ============
 async def finish_appeal(message: Message, state: FSMContext, contact):
     data = await state.get_data()
     user = message.from_user
+    file_id = data.get("file_id")
+    file_type = data.get("file_type")
+
     appeal_id = save_appeal(
         user_id=user.id,
         category=data["category"],
         text=data["text"],
         contact=contact,
+        file_id=file_id,
+        file_type=file_type,
     )
     await state.clear()
 
@@ -182,7 +252,7 @@ async def finish_appeal(message: Message, state: FSMContext, contact):
         "Спасибо, что не остаётесь в стороне!"
     )
 
-    admin_text = (
+    header = (
         f"📩 <b>Новое обращение №{appeal_id}</b>\n\n"
         f"<b>Категория:</b> {data['category']}\n"
         f"<b>Контакт:</b> {contact or 'анонимно'}\n\n"
@@ -192,10 +262,33 @@ async def finish_appeal(message: Message, state: FSMContext, contact):
         [InlineKeyboardButton(text="✉️ Ответить",
                               callback_data=f"reply:{appeal_id}")]
     ])
+
     try:
-        await bot.send_message(ADMIN_CHAT_ID, admin_text, reply_markup=kb)
+        if file_type == "photo":
+            await bot.send_photo(
+                ADMIN_CHAT_ID, file_id,
+                caption=caption_safe(header), reply_markup=kb,
+            )
+        elif file_type == "document":
+            await bot.send_document(
+                ADMIN_CHAT_ID, file_id,
+                caption=caption_safe(header), reply_markup=kb,
+            )
+        elif file_type == "video":
+            await bot.send_video(
+                ADMIN_CHAT_ID, file_id,
+                caption=caption_safe(header), reply_markup=kb,
+            )
+        else:
+            await bot.send_message(ADMIN_CHAT_ID, header, reply_markup=kb)
     except Exception as e:
         logging.error("Не удалось отправить в админ-чат: %s", e)
+
+
+def caption_safe(text: str) -> str:
+    """Telegram ограничивает подписи к медиа 1024 символами."""
+    return text if len(text) <= 1024 else text[:1020] + "…"
+
 
 # ============ ОТВЕТ АДМИНИСТРАТОРА ============
 @dp.callback_query(F.data.startswith("reply:"))
@@ -207,6 +300,7 @@ async def start_reply(callback: CallbackQuery, state: FSMContext):
         f"Введите текст ответа для обращения №{appeal_id}:"
     )
     await callback.answer()
+
 
 @dp.message(AdminReply.writing_reply)
 async def send_reply(message: Message, state: FSMContext):
@@ -230,6 +324,7 @@ async def send_reply(message: Message, state: FSMContext):
         await message.answer(f"⚠️ Не удалось отправить: {e}")
     await state.clear()
 
+
 # ============ СТАТИСТИКА ============
 @dp.message(Command("stats"))
 async def stats(message: Message):
@@ -248,11 +343,13 @@ async def stats(message: Message):
         lines.append(f"• {cat}: {cnt}")
     await message.answer("\n".join(lines))
 
+
 # ============ ЗАПУСК ============
 async def main():
     init_db()
     logging.info("Бот запущен. Ожидаю сообщения...")
     await dp.start_polling(bot)
+
 
 if __name__ == "__main__":
     asyncio.run(main())

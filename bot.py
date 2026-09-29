@@ -18,9 +18,12 @@ from aiogram.types import (
 )
 
 # ============ НАСТРОЙКИ ============
-BOT_TOKEN = "8791470134:AAFBcpO2ZRYB69fPBmtaq3T6KqaTgA2seo8"
-ADMIN_CHAT_ID = -1004346719323
+import os
+
+BOT_TOKEN = os.getenv("BOT_TOKEN")
+ADMIN_CHAT_ID = int(os.getenv("ADMIN_CHAT_ID", "0"))
 DB_PATH = "appeals.db"
+
 if not BOT_TOKEN:
     raise SystemExit("❌ BOT_TOKEN не задан в переменных окружения Bothost")
 if ADMIN_CHAT_ID == 0:

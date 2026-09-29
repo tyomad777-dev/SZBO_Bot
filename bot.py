@@ -45,11 +45,16 @@ def init_db():
             category TEXT,
             text TEXT,
             contact TEXT,
-            file_id TEXT,
-            file_type TEXT,
             created_at TEXT
         )
     """)
+    # Миграция: добавляем колонки, если старая база ещё без них
+    cur.execute("PRAGMA table_info(appeals)")
+    columns = {row[1] for row in cur.fetchall()}
+    if "file_id" not in columns:
+        cur.execute("ALTER TABLE appeals ADD COLUMN file_id TEXT")
+    if "file_type" not in columns:
+        cur.execute("ALTER TABLE appeals ADD COLUMN file_type TEXT")
     conn.commit()
     conn.close()
 
@@ -232,33 +237,46 @@ async def skip_contact(callback: CallbackQuery, state: FSMContext):
 
 
 # ============ ЗАВЕРШЕНИЕ ПРИЁМА ============
-async def finish_appeal(message: Message, state: FSMContext, contact):
+async def async def finish_appeal(message: Message, state: FSMContext, contact):
     data = await state.get_data()
-    user = message.from_user
+    user_id = message.chat.id
     file_id = data.get("file_id")
     file_type = data.get("file_type")
 
-    appeal_id = save_appeal(
-        user_id=user.id,
-        category=data["category"],
-        text=data["text"],
-        contact=contact,
-        file_id=file_id,
-        file_type=file_type,
-    )
+    try:
+        appeal_id = save_appeal(
+            user_id=user_id,
+            category=data.get("category", "Не указана"),
+            text=data.get("text", ""),
+            contact=contact,
+            file_id=file_id,
+            file_type=file_type,
+        )
+    except Exception as e:
+        logging.exception("Ошибка сохранения обращения: %s", e)
+        await message.answer(
+            "⚠️ Не удалось сохранить обращение. Попробуйте ещё раз "
+            "или напишите нам напрямую."
+        )
+        await state.clear()
+        return
+
     await state.clear()
 
-    await message.answer(
-        f"✅ <b>Обращение №{appeal_id} принято.</b>\n\n"
-        "Мы рассмотрим его. Если вы оставили контакт — свяжемся с вами.\n"
-        "Спасибо, что не остаётесь в стороне!"
-    )
+    try:
+        await message.answer(
+            f"✅ <b>Обращение №{appeal_id} принято.</b>\n\n"
+            "Мы рассмотрим его. Если вы оставили контакт — свяжемся с вами.\n"
+            "Спасибо, что не остаётесь в стороне!"
+        )
+    except Exception as e:
+        logging.exception("Не удалось ответить пользователю: %s", e)
 
     header = (
         f"📩 <b>Новое обращение №{appeal_id}</b>\n\n"
-        f"<b>Категория:</b> {data['category']}\n"
+        f"<b>Категория:</b> {data.get('category', 'Не указана')}\n"
         f"<b>Контакт:</b> {contact or 'анонимно'}\n\n"
-        f"<b>Текст:</b>\n{data['text']}"
+        f"<b>Текст:</b>\n{data.get('text', '')}"
     )
     kb = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="✉️ Ответить",
@@ -284,7 +302,11 @@ async def finish_appeal(message: Message, state: FSMContext, contact):
         else:
             await bot.send_message(ADMIN_CHAT_ID, header, reply_markup=kb)
     except Exception as e:
-        logging.error("Не удалось отправить в админ-чат: %s", e)
+        logging.exception("Не удалось отправить в админ-чат: %s", e)
+        await message.answer(
+            "✅ Обращение сохранено, но уведомить активистов не удалось. "
+            "Попробуйте написать нам ещё раз через пару минут."
+        )
 
 
 def caption_safe(text: str) -> str:

@@ -19,7 +19,16 @@ from aiogram.types import (
 )
 
 # ============ ЗАГРУЗКА .env ============
-from config import BOT_TOKEN, ADMIN_CHAT_ID
+import os
+
+BOT_TOKEN = os.getenv("BOT_TOKEN")
+ADMIN_CHAT_ID = int(os.getenv("ADMIN_CHAT_ID", "0"))
+DB_PATH = "appeals.db"
+
+if not BOT_TOKEN:
+    raise SystemExit("❌ BOT_TOKEN не задан в переменных окружения Bothost")
+if ADMIN_CHAT_ID == 0:
+    raise SystemExit("❌ ADMIN_CHAT_ID не задан в переменных окружения Bothost")
 DB_PATH = "appeals.db"                         # ← ID вашей группы активистов
 DB_PATH = "appeals.db"
 

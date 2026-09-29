@@ -19,10 +19,8 @@ from aiogram.types import (
 )
 
 # ============ ЗАГРУЗКА .env ============
-load_dotenv()
-
-BOT_TOKEN = os.getenv("BOT_TOKEN")
-ADMIN_CHAT_ID = int(os.getenv("ADMIN_CHAT_ID", "0"))
+BOT_TOKEN = "8791470134:AAEvdyNGT3Z7BlnA1-q-zfJR2O3ITYJJGYI"   # ← Ваш токен от BotFather
+ADMIN_CHAT_ID = -1004346719323                           # ← ID вашей группы активистов
 DB_PATH = "appeals.db"
 
 if not BOT_TOKEN:
